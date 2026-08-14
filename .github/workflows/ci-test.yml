@@ -1,0 +1,29 @@
+name: CI Test
+on:
+  push:
+    branches: [ main ]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt || pip install scipy pandas plotly matplotlib
+          else
+            pip install scipy pandas plotly matplotlib
+          fi
+      - name: Run processor test
+        run: |
+          python tests/run_processor_test.py
+      - name: Upload test outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: test_out
+          path: test_out

@@ -117,7 +117,6 @@ with right:
                 prior = st.session_state.get(key, "(不强配)")
                 sel = st.selectbox(f"{z}", options=default_lfas, index=default_lfas.index(prior) if prior in default_lfas else 0, key=key)
                 pairing[z] = sel if sel != "(不强配)" else None
-                st.session_state[key] = sel
 
             st.markdown("操作：")
             col_op = st.columns(3)

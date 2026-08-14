@@ -22,8 +22,9 @@ jobs:
       - name: Run processor test
         run: |
           python tests/run_processor_test.py
-      - name: Upload test outputs
-        uses: actions/upload-artifact@v4
-        with:
-          name: test_out
-          path: test_out
+- name: Upload test outputs
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: test_out
+    path: test_out

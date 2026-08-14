@@ -1,16 +1,21 @@
 name: CI Test
+
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -19,12 +24,14 @@ jobs:
           else
             pip install scipy pandas plotly matplotlib
           fi
+
       - name: Run processor test
         run: |
           python tests/run_processor_test.py
-- name: Upload test outputs
-  if: always()
-  uses: actions/upload-artifact@v4
-  with:
-    name: test_out
-    path: test_out
+
+      - name: Upload test outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test_out
+          path: test_out

@@ -26,8 +26,9 @@ jobs:
           fi
 
       - name: Run processor test
-        run: |
-          python tests/run_processor_test.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python tests/run_processor_test.py
 
       - name: Upload test outputs
         if: always()

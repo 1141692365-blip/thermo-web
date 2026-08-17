@@ -19,14 +19,20 @@ def _extract_numbers_from_line(line: str):
     return NUM_RE.findall(line)
 
 
+def _convert_celsius_to_kelvin_if_needed(out: pd.DataFrame) -> pd.DataFrame:
+    # If there's a T column and max value looks like Celsius (e.g. < 200), convert to Kelvin
+    if 'T' in out.columns and out['T'].notna().any():
+        try:
+            if out['T'].max() < 200:
+                out['T'] = out['T'] + 273.15
+        except Exception:
+            pass
+    return out
+
+
 def parse_zem(path: Path) -> pd.DataFrame:
     """
     Robust parser for common ZEM output formats.
-    Strategy:
-    - Scan the first ~200 lines for a header line containing keywords (temp, seeb, rho, resist).
-    - Find the first numeric data line (at least 2 numbers).
-    - Try reading with several separators, using header when found, otherwise as header=None and map columns by position.
-    - Fall back to taking the first 2-3 numeric columns as T, S, rho.
     Returns DataFrame with columns 'T', 'S' and optionally 'rho' (numeric), or empty DataFrame on failure.
     """
     txt = path.read_text(encoding='utf-8', errors='ignore')
@@ -70,13 +76,12 @@ def parse_zem(path: Path) -> pd.DataFrame:
             if header_present:
                 df = pd.read_csv(StringIO(content), sep=sep, engine='python')
             else:
-                # no header line; read as positional columns
                 df = pd.read_csv(StringIO(content), header=None, sep=sep, engine='python')
         except Exception:
             continue
         if df is None or df.shape[0] == 0:
             continue
-        # Normalize column names
+        # Normalize column names and map
         if header_present:
             cols = [str(c).strip() for c in df.columns]
             lower = [c.lower() for c in cols]
@@ -86,7 +91,7 @@ def parse_zem(path: Path) -> pd.DataFrame:
                     colmap['T'] = cols[i]
                 if 'seeb' in c or 'seebeck' in c or 'thermopower' in c or (c.strip() == 's'):
                     colmap['S'] = cols[i]
-                if 'resist' in c or 'rho' in c or c.strip() in ('res', 'resistivity'):
+                if 'resist' in c or 'rho' in c or c.strip() in ('res', 'resistivity', 'resistivity(ohm m)'):
                     colmap['rho'] = cols[i]
             out = pd.DataFrame()
             if 'T' in colmap:
@@ -95,42 +100,32 @@ def parse_zem(path: Path) -> pd.DataFrame:
                 out['S'] = _to_num(df[colmap['S']])
             if 'rho' in colmap:
                 out['rho'] = _to_num(df[colmap['rho']])
-            # If we found T (and maybe others) return
             if 'T' in out.columns and not out['T'].dropna().empty:
                 out = out.dropna(subset=['T']).sort_values('T').reset_index(drop=True)
+                out = _convert_celsius_to_kelvin_if_needed(out)
                 return out
             # else continue trying other separators
         else:
             # headerless numeric table: pick numeric columns
-            # ensure columns are numeric where possible
             num_df = df.apply(_to_num)
-            # keep only numeric columns
             numeric_cols = [c for c in num_df.columns if pd.api.types.is_numeric_dtype(num_df[c])]
             if len(numeric_cols) >= 2:
-                # Heuristic: choose first column that is monotonic increasing and within typical temp ranges as T
+                # Heuristic: choose first column that is monotonic and within plausible temp range as T
                 chosen_T = None
                 for c in numeric_cols[:3]:
                     col = num_df[c]
                     if col.dropna().empty:
                         continue
                     mn, mx = col.min(), col.max()
-                    # typical temperature 0..1500 K heuristic
-                    if 0 <= mn <= mx and (mn >= -50 and mx <= 2000):
-                        # prefer columns that are mostly increasing
+                    if -50 <= mn <= mx <= 2000:
                         if col.is_monotonic_increasing or col.is_monotonic_decreasing:
                             chosen_T = c
                             break
                 if chosen_T is None:
                     chosen_T = numeric_cols[0]
-                # choose subsequent columns as S and rho if present
                 idx = numeric_cols.index(chosen_T)
-                # try to pick S as next numeric column
-                s_col = None
-                rho_col = None
-                if idx + 1 < len(numeric_cols):
-                    s_col = numeric_cols[idx + 1]
-                if idx + 2 < len(numeric_cols):
-                    rho_col = numeric_cols[idx + 2]
+                s_col = numeric_cols[idx + 1] if idx + 1 < len(numeric_cols) else None
+                rho_col = numeric_cols[idx + 2] if idx + 2 < len(numeric_cols) else None
                 out = pd.DataFrame()
                 out['T'] = num_df[chosen_T]
                 if s_col is not None:
@@ -138,8 +133,9 @@ def parse_zem(path: Path) -> pd.DataFrame:
                 if rho_col is not None:
                     out['rho'] = num_df[rho_col]
                 out = out.dropna(subset=['T']).sort_values('T').reset_index(drop=True)
+                out = _convert_celsius_to_kelvin_if_needed(out)
                 return out
-    # Final fallback: try to extract numeric tokens line-by-line and build columns
+    # Final fallback: extract numeric tokens line-by-line
     rows = []
     for line in lines:
         nums = _extract_numbers_from_line(line)
@@ -154,6 +150,7 @@ def parse_zem(path: Path) -> pd.DataFrame:
         if arr.shape[1] >= 3:
             out['rho'] = _to_num(arr[:, 2])
         out = out.dropna(subset=['T']).sort_values('T').reset_index(drop=True)
+        out = _convert_celsius_to_kelvin_if_needed(out)
         return out
 
     return pd.DataFrame()
@@ -167,13 +164,12 @@ def parse_lfa(path: Path) -> pd.DataFrame:
 
     header_line = None
     data_lines = []
-    # search for header-like commented line (starts with #) that contains keywords
     for line in lines:
         s = line.strip()
         if s.startswith('#'):
-            lower = s.lower()
-            if 'temperature' in lower or 'diffus' in lower or 'shot' in lower:
-                # remove leading '#'s and possible leading labels
+            lower = s.lstrip('#').strip().lower()
+            # Catch commented header like '#Shot number,#Time/min,#Temperature/°C,#Diffusivity/(mm^2/s)'
+            if any(k in lower for k in ('temperature', 'diffus', 'shot')):
                 header_line = s.lstrip('#').strip()
         if any(ch.isdigit() for ch in s) and (',' in s or '\t' in s):
             data_lines.append(s)
@@ -181,10 +177,8 @@ def parse_lfa(path: Path) -> pd.DataFrame:
     from io import StringIO
     try:
         if header_line and data_lines:
-            # attempt to build CSV with header + data
             combined = header_line + '\n' + '\n'.join(data_lines)
             df = pd.read_csv(StringIO(combined), sep=',', engine='python')
-            # map possible header names to T and alpha
             cols_l = [c.lower() for c in df.columns]
             t_col = None
             a_col = None
@@ -198,24 +192,21 @@ def parse_lfa(path: Path) -> pd.DataFrame:
                 out['T'] = _to_num(df[t_col])
             if a_col:
                 out['alpha'] = _to_num(df[a_col])
-            # if alpha present but T missing, try to find T in another column
             if 'alpha' in out.columns and 'T' not in out.columns:
-                # try to find numeric column in df that looks like temperature
                 for i, c in enumerate(df.columns):
                     colnum = _to_num(df[c])
                     mn, mx = colnum.min(), colnum.max()
-                    if not colnum.dropna().empty and (mn >= -50 and mx <= 2000):
+                    if not colnum.dropna().empty and (-50 <= mn <= mx <= 2000):
                         out['T'] = colnum
                         break
             out = out.dropna(subset=['alpha']).reset_index(drop=True)
+            out = _convert_celsius_to_kelvin_if_needed(out)
             return out
         else:
-            # fallback: parse numeric data lines without header
             if not data_lines:
                 return pd.DataFrame()
             df = pd.read_csv(StringIO('\n'.join(data_lines)), header=None)
             num_df = df.apply(_to_num)
-            # Heuristic: Temperature likely in a column with values in 0..2000 and alpha in mm2/s typical ~0.1..100
             t_col = None
             a_col = None
             for c in num_df.columns:
@@ -223,25 +214,23 @@ def parse_lfa(path: Path) -> pd.DataFrame:
                 if col.dropna().empty:
                     continue
                 mn, mx = col.min(), col.max()
-                if t_col is None and (mn >= -50 and mx <= 2000) and (col.is_monotonic_increasing or col.is_monotonic_decreasing):
+                if t_col is None and (-50 <= mn <= mx <= 2000) and (col.is_monotonic_increasing or col.is_monotonic_decreasing):
                     t_col = c
-                # diffusivity guess: values typically between 0.001 and 100 (mm2/s)
-                if a_col is None and (mn > 0) and (mn >= 1e-4 and mx <= 1e4):
+                if a_col is None and (mn > 0) and (mn >= 1e-6 and mx <= 1e4):
                     a_col = c
             out = pd.DataFrame()
             if t_col is not None:
                 out['T'] = num_df[t_col]
-            # try commonly the temperature is third column in LFA results, diffusivity fourth
             if a_col is None and num_df.shape[1] >= 4:
                 a_col = 3
             if a_col is not None:
                 out['alpha'] = num_df[a_col]
-            # As final fallback, if shape[1]>=3, take column 2 as temperature and 3 as alpha
             if 'T' not in out.columns and num_df.shape[1] >= 3:
                 out['T'] = num_df[2]
             if 'alpha' not in out.columns and num_df.shape[1] >= 4:
                 out['alpha'] = num_df[3]
             out = out.dropna(subset=['alpha']).reset_index(drop=True)
+            out = _convert_celsius_to_kelvin_if_needed(out)
             return out
     except Exception:
         return pd.DataFrame()

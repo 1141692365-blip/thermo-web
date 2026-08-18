@@ -36,12 +36,38 @@ if st.sidebar.button("Compute ZT"):
             # write temps
             zem_path = Path(".tmp_zem.tmp")
             zem_path.write_bytes(zem_file.getvalue())
+
+            # debug/guard: preview raw file and parsed DataFrame
+            raw = zem_path.read_text(errors='ignore')
+            st.sidebar.markdown("**ZEM file preview (first 2000 chars)**")
+            st.sidebar.code(raw[:2000])
+
             zem_df = parse_zem(zem_path)
+            st.sidebar.markdown("**Parsed ZEM (columns & head)**")
+            if zem_df is None or zem_df.empty:
+                st.sidebar.write("Parsed ZEM DataFrame is empty — parser 未能识别温度/数值列。")
+                st.error("无法解析 ZEM 文件。请确认文件格式，或把文件前 20 行贴到对话中以便进一步调试。")
+                st.stop()
+            else:
+                st.sidebar.write(zem_df.columns.tolist())
+                st.sidebar.dataframe(zem_df.head())
+
             lfa_df = None
             if lfa_file:
                 lfa_path = Path(".tmp_lfa.tmp")
                 lfa_path.write_bytes(lfa_file.getvalue())
+                # show lfa preview
+                raw_lfa = lfa_path.read_text(errors='ignore')
+                st.sidebar.markdown("**LFA file preview (first 2000 chars)**")
+                st.sidebar.code(raw_lfa[:2000])
                 lfa_df = parse_lfa(lfa_path)
+                st.sidebar.markdown("**Parsed LFA (columns & head)**")
+                if lfa_df is None or lfa_df.empty:
+                    st.sidebar.write("Parsed LFA DataFrame is empty — parser 未能识别热扩散率/温度列。")
+                else:
+                    st.sidebar.write(lfa_df.columns.tolist())
+                    st.sidebar.dataframe(lfa_df.head())
+
             try:
                 result = compute_thermo(zem_df, lfa_df, cp=cp, density=density,
                                         s_unit=s_unit, rho_unit=rho_unit, alpha_unit=alpha_unit,
